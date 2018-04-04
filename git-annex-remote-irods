@@ -8,11 +8,14 @@
 # Copyright 2013 Joey Hess; licenced under the GNU GPL version 3 or higher.
 
 set -e
+#set -x
 
 # This program speaks a line-based protocol on stdin and stdout.
 # When running any commands, their stdout should be redirected to stderr
 # (or /dev/null) to avoid messing up the protocol.
 runcmd () {
+	echo "$@" >> log.txt 2>&1
+#	echo >&2
 	"$@" >&2
 }
 
@@ -78,21 +81,21 @@ dostore () {
 	local key="$1"
 	local file="$2"
 	local loc="$3"
-	mkdir -p "$(dirname "$loc")"
+	runcmd imkdir -p "$(dirname "$loc")"
 	# Store in temp file first, so that CHECKPRESENT does not see it
 	# until it is all stored.
-	mkdir -p "$mydirectory/tmp"
+	runcmd imkdir -p "$mydirectory/tmp"
 	tmp="$mydirectory/tmp/$key"
 	# XXX when at all possible, send PROGRESS while transferring
 	# the file.
-	rm -f "$tmp"
-	if runcmd cp "$file" "$tmp" \
-	   && runcmd mv -f "$tmp" "$loc"; then
+	runcmd irm -f "$tmp" "$loc" 2>/dev/null || true
+	if runcmd iput "$file" "$tmp" \
+	   && runcmd imv "$tmp" "$loc"; then
 		echo TRANSFER-SUCCESS STORE "$key"
 	else
 		echo TRANSFER-FAILURE STORE "$key"
 	fi
-	rmdir "$mydirectory/tmp"
+	runcmd irm -r "$mydirectory/tmp"
 }
 
 doretrieve () {
@@ -101,8 +104,8 @@ doretrieve () {
 	local loc="$3"
 	
 	# XXX when easy to do, send PROGRESS while transferring the file
-	if [ -e "$loc" ]; then
-		if runcmd cp "$loc" "$file"; then
+	if runcmd ils "$loc" 2>/dev/null ; then
+		if runcmd iget -f "$loc" "$file"; then
 			echo TRANSFER-SUCCESS RETRIEVE "$key"
 		else
 			echo TRANSFER-FAILURE RETRIEVE "$key"
@@ -116,10 +119,10 @@ docheckpresent () {
 	local key="$1"
 	local loc="$2"
 
-	if [ -e "$loc" ]; then
+	if runcmd ils "$loc" 2>/dev/null ; then
 		echo CHECKPRESENT-SUCCESS "$key"
 	else
-		if [ -d "$mydirectory" ]; then
+		if runcmd ils "$mydirectory" 2>/dev/null ; then
 			echo CHECKPRESENT-FAILURE "$key"
 		else
 			# When the directory does not exist,
@@ -127,7 +130,7 @@ docheckpresent () {
 			# (A network remote would similarly
 			# fail with CHECKPRESENT-UNKNOWN
 			# if it couldn't be contacted).
-			echo CHECKPRESENT-UNKNOWN "$key" "this remote is not currently available"
+			echo CHECKPRESENT-UNKNOWN "$key" "this remote is not currently available (ils $mydirectory)"
 		fi
 	fi
 }
@@ -138,8 +141,8 @@ doremove () {
 
 	# Note that it's not a failure to remove a
 	# fike that is not present.
-	if [ -e "$loc" ]; then
-		if runcmd rm -f "$loc"; then
+	if runcmd ils "$loc" 2>/dev/null; then
+		if runcmd irm -f "$loc"; then
 			echo REMOVE-SUCCESS "$key"
 		else
 			echo REMOVE-FAILURE "$key"
@@ -171,13 +174,15 @@ while read line; do
 			# could be relative; make it absolute,
 			# and store that.
 			getconfig directory
-			mydirectory="$(readlink -f "$RET")" || true
-			setconfig directory "$mydirectory"
+			#mydirectory="$(readlink -f "$RET")" || true
+			mydirectory="$RET"
+			#setconfig directory "$mydirectory"
 			if [ -z "$mydirectory" ]; then
 				echo INITREMOTE-FAILURE "You need to set directory="
 			else
-				if mkdir -p "$mydirectory"; then
-					setupcreds
+				if runcmd imkdir -p "$mydirectory"; then
+					#setupcreds
+					echo INITREMOTE-SUCCESS
 				else
 					echo INITREMOTE-FAILURE "Failed to write to $mydirectory"
 				fi
@@ -187,10 +192,10 @@ while read line; do
 			# Use GETCONFIG to get configuration settings,
 			# and do anything needed to get ready for using the
 			# special remote here.
-			getcreds
+			#getcreds
 			getconfig directory
 			mydirectory="$RET"
-			if [ -d "$mydirectory" ]; then
+			if runcmd ils "$mydirectory" 2>/dev/null ; then
 				echo PREPARE-SUCCESS
 			else
 				echo PREPARE-FAILURE "$mydirectory not found"
@@ -267,7 +272,7 @@ while read line; do
 		REMOVEEXPORTDIRECTORY)
 			shift 1
 			dir="$@"
-			if [ ! -d "$dir" ] || rm -rf "$mydirectory/$dir"; then
+			if ! runcmd ils "$dir" 2>/dev/null || runcmd irm -r "$mydirectory/$dir"; then
 				echo REMOVEEXPORTDIRECTORY-SUCCESS
 			else
 				echo REMOVEEXPORTDIRECTORY-FAILURE
@@ -277,8 +282,8 @@ while read line; do
 			key="$2"
 			shift 2
 			newexportlocation="$mydirectory/$@"
-			mkdir -p "$(dirname "$newexportlocation")"
-			if runcmd mv -f "$exportlocation" "$newexportlocation"; then
+			runcmd imkdir -p "$(dirname "$newexportlocation")"
+			if runcmd imv -f "$exportlocation" "$newexportlocation"; then
 				echo RENAMEEXPORT-SUCCESS "$key"
 			else
 				echo RENAMEEXPORT-FAILURE "$key"
