@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+
+import contextlib
+import io
+import os
+import sys
+
+from annexremote import Master
+from annexremote import SpecialRemote
+from annexremote import RemoteError
+
+import irods.exception
+import irods.keywords
+from irods.session import iRODSSession
+from irods.data_object import chunks
+
+# this comes straight from python-irodsclient
+#BUFSIZE = 1024 * io.DEFAULT_BUFFER_SIZE
+
+def recursive_collection_create(session, path):
+    """Create a collection, creating parents if needed."""
+    missing = [ ]
+    if not session.collections.exists(path):
+        heads, tail = os.path.split(path)
+        if not session.collections.exists(heads):
+            recursive_collection_create(session, heads)
+        session.collections.create(path)
+
+@contextlib.contextmanager
+def temporary_collection(session, path):
+    """Create a temporary collection, removing it when done"""
+    if session.collections.exists(path):
+        coll = session.collections.get(path)
+    else:
+        coll = session.collections.create(path)
+    yield coll
+    coll.remove(recurse=True, force=True)
+
+
+
+class iRODSRemote(SpecialRemote):
+    def __init__(self, session, *args, **kwargs):
+        self.basepath = None
+        self.session = session
+        return super().__init__(*args, **kwargs)
+
+    def getcost(self):
+        return 500
+
+    def initremote(self):
+        # initialize the remote, eg. create the folders
+        # raise RemoteError if the remote couldn't be initialized
+        self.basepath = self.annex.getconfig('directory')
+        # TODO: test iRODS access
+        recursive_collection_create(self.session, self.basepath)
+
+    def prepare(self):
+        # prepare to be used, eg. open TCP connection, authenticate with the server etc.
+        # raise RemoteError if not ready to use
+        self.basepath = self.annex.getconfig('directory')
+        if not self.session.collections.exists(self.basepath):
+            raise RemoteError("base dir {} not findable".format(self.basepath))
+        #try:
+        #except Exception as e:
+        #    raise RemoteError(e.args)
+
+    def transfer_store(self, key, filename):
+        # store the file in `filename` to a unique location derived from `key`
+        # raise RemoteError if the file couldn't be stored
+        path = os.path.join(self.basepath, self.annex.dirhash(key))
+        # Recurse in code since 26bbc069b (2018-02-06)
+        #self.session.collections.create(path, recurse=True)
+        recursive_collection_create(self.session, path)
+        path = os.path.join(path, key)
+
+        #with open(filename, 'rb') as f, \
+        #     self.session.data_objects.open(path, 'w') as o:
+        #    for chunk in chunks(f):
+        #        o.write(chunk)
+
+        with temporary_collection(self.session,
+                                  os.path.join(self.basepath, 'tmp')) as tmpcoll:
+            tmppath = os.path.join(tmpcoll.path, key)
+            self.session.data_objects.put(filename, tmppath,
+                                          **{irods.keywords.FORCE_FLAG_KW:True})
+            try:
+                self.session.data_objects.unlink(path, force=True)
+            except irods.exception.CAT_NO_ROWS_FOUND:
+                pass
+            self.session.data_objects.move(tmppath, path)
+
+    def transfer_retrieve(self, key, filename):
+        # get the file identified by `key` and store it to `filename`
+        # raise RemoteError if the file couldn't be retrieved
+        path = os.path.join(self.basepath, self.annex.dirhash(key), key)
+        #with open(filename, 'wb') as f, \
+        #     self.session.data_objects.get(path).open('r') as o:
+        #    for chunk in chunks(o):
+        #        f.write(chunk)
+        self.session.data_objects.get(path, filename,
+                                      **{irods.keywords.FORCE_FLAG_KW:True})
+
+    def checkpresent(self, key):
+        # return True if the key is present in the remote
+        # return False if the key is not present
+        # raise RemoteError if the presence of the key couldn't be determined, eg. in case of connection error
+        path = os.path.join(self.basepath, self.annex.dirhash(key), key)
+        return self.session.data_objects.exists(path)
+
+
+    def remove(self, key):
+        # remove the key from the remote
+        # raise RemoteError if it couldn't be removed
+        # note that removing a not existing key isn't considered an error
+        path = os.path.join(self.basepath, self.annex.dirhash(key), key)
+        #print("removing {} {}".format(key, path), file=sys.stderr)
+        try:
+            obj = self.session.data_objects.get(path)
+            obj.unlink(force=True)
+        except (irods.exception.NoResultFound, irods.exception.CollectionDoesNotExist, irods.exception.DataObjectDoesNotExist):
+            pass
+
+    #def transferexport_store(self, key, file_, name):
+    #    return self.transfer_store(key, file_)
+    #
+    #def transferexport_retrieve(self, key, file_, name):
+    #    pass
+    #
+    #def checkpresentexport(self, key, name):
+    #    pass
+    #
+    #def removeexport(self, key, name):
+    #    pass
+    #
+    def removeexportdirectory(self, directory):
+        coll = self.session.collection.get(directory)
+        coll.remove(recurse=True)
+
+    def renameexport(self, key, name, new_name):
+        coll = self.session.collection.get(name)
+        coll.move(new_name)
+
+
+def main():
+
+    master = Master()  # git annex protocol object
+
+    # Get authentication, from environment or git-annex config
+    try:
+        env_file = os.environ['IRODS_ENVIRONMENT_FILE']
+    except KeyError:
+        env_file = os.path.expanduser('~/.irods/irods_environment.json')
+
+    with iRODSSession(irods_env_file=env_file) as session:
+        remote = iRODSRemote(session, master)
+        master.LinkRemote(remote)
+        master.Listen()
+
+if __name__ == "__main__":
+    main()
