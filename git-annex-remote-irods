@@ -86,6 +86,7 @@ dostore () {
 	# until it is all stored.
 	runcmd imkdir -p "$mydirectory/tmp"
 	tmp="$mydirectory/tmp/$key"
+	#tmp="$mydirectory/tmp.tmp.tmp.$key"
 	# XXX when at all possible, send PROGRESS while transferring
 	# the file.
 	runcmd irm -f "$tmp" "$loc" 2>/dev/null || true
@@ -95,6 +96,7 @@ dostore () {
 	else
 		echo TRANSFER-FAILURE STORE "$key"
 	fi
+	# TODO: broken, does not guarentee tmp file is removed!
 	runcmd irm -r "$mydirectory/tmp"
 }
 
@@ -104,12 +106,17 @@ doretrieve () {
 	local loc="$3"
 	
 	# XXX when easy to do, send PROGRESS while transferring the file
-	if runcmd ils "$loc" 2>/dev/null ; then
-		if runcmd iget -f "$loc" "$file"; then
-			echo TRANSFER-SUCCESS RETRIEVE "$key"
-		else
-			echo TRANSFER-FAILURE RETRIEVE "$key"
-		fi
+	#if runcmd ils "$loc" 2>/dev/null ; then
+	#	if runcmd iget -f "$loc" "$file"; then
+	#		echo TRANSFER-SUCCESS RETRIEVE "$key"
+	#	else
+	#		echo TRANSFER-FAILURE RETRIEVE "$key"
+	#	fi
+	#else
+	#	echo TRANSFER-FAILURE RETRIEVE "$key"
+	#fi
+	if runcmd iget -f "$loc" "$file" ; then
+		echo TRANSFER-SUCCESS RETRIEVE "$key"
 	else
 		echo TRANSFER-FAILURE RETRIEVE "$key"
 	fi
@@ -141,14 +148,26 @@ doremove () {
 
 	# Note that it's not a failure to remove a
 	# fike that is not present.
-	if runcmd ils "$loc" 2>/dev/null; then
-		if runcmd irm -f "$loc"; then
-			echo REMOVE-SUCCESS "$key"
-		else
-			echo REMOVE-FAILURE "$key"
-		fi
-	else
+	#if runcmd ils "$loc" 2>/dev/null; then
+	#	if runcmd irm -f "$loc"; then
+	#		echo REMOVE-SUCCESS "$key"
+	#	else
+	#		echo REMOVE-FAILURE "$key"
+	#	fi
+	#else
+	#	echo REMOVE-SUCCESS "$key"
+	#fi
+
+	# TODO: this is technically incorrect, irm can exit with 3 as
+	# a failure of a kind that doesn't mean not there.
+	set +e
+	runcmd irm -f "$loc" 2>/dev/null
+	retval=$?
+	set -e
+	if [ "$retval" -eq 0 -o "$retval" -eq 3 ] ; then
 		echo REMOVE-SUCCESS "$key"
+	else
+		echo REMOVE-FAILURE "$key"
 	fi
 }
 
@@ -272,7 +291,7 @@ while read line; do
 		REMOVEEXPORTDIRECTORY)
 			shift 1
 			dir="$@"
-			if ! runcmd ils "$dir" 2>/dev/null || runcmd irm -r "$mydirectory/$dir"; then
+			if ! runcmd ils "$dir" 2>/dev/null || runcmd irm -rf "$mydirectory/$dir"; then
 				echo REMOVEEXPORTDIRECTORY-SUCCESS
 			else
 				echo REMOVEEXPORTDIRECTORY-FAILURE
@@ -289,7 +308,9 @@ while read line; do
 				echo RENAMEEXPORT-FAILURE "$key"
 			fi
 		;;
-
+		GETCOST)
+			echo COST "500"
+		;;
 		*)
 			echo UNSUPPORTED-REQUEST
 		;;
@@ -297,3 +318,4 @@ while read line; do
 done
 
 # XXX anything that needs to be done at shutdown can be done here
+#runcmd irm -r "$mydirectory/tmp.tmp.tmp.*"
