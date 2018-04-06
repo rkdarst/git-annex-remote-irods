@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import logging
 import os
 import sys
 
@@ -17,23 +18,33 @@ from irods.data_object import chunks
 # this comes straight from python-irodsclient
 #BUFSIZE = 1024 * io.DEFAULT_BUFFER_SIZE
 
+LOGGER = logging.getLogger(__name__)
+
 def recursive_collection_create(session, path):
     """Create a collection, creating parents if needed."""
     missing = [ ]
+    LOGGER.debug("recursive_collection_create: exists %s", path)
     if not session.collections.exists(path):
         heads, tail = os.path.split(path)
+        LOGGER.debug("recursive_collection_create: exists %s", heads)
         if not session.collections.exists(heads):
+            LOGGER.debug("recursive_collection_create: exec with %s", heads)
             recursive_collection_create(session, heads)
+        LOGGER.debug("recursive_collection_create: create %s", path)
         session.collections.create(path)
 
 @contextlib.contextmanager
 def temporary_collection(session, path):
     """Create a temporary collection, removing it when done"""
+    LOGGER.debug("temporary_collection: exists %s", path)
     if session.collections.exists(path):
+        LOGGER.debug("temporary_collection: get %s", path)
         coll = session.collections.get(path)
     else:
+        LOGGER.debug("temporary_collection: create %s", path)
         coll = session.collections.create(path)
     yield coll
+    LOGGER.debug("temporary_collection: remove %s", coll)
     coll.remove(recurse=True, force=True)
 
 
@@ -51,14 +62,19 @@ class iRODSRemote(SpecialRemote):
         # initialize the remote, eg. create the folders
         # raise RemoteError if the remote couldn't be initialized
         self.basepath = self.annex.getconfig('directory')
+        LOGGER.debug("initremote: basepath = %s", self.basepath)
         # TODO: test iRODS access
+        LOGGER.debug("initremote: recursive_collection_create %s", self.basepath)
         recursive_collection_create(self.session, self.basepath)
 
     def prepare(self):
         # prepare to be used, eg. open TCP connection, authenticate with the server etc.
         # raise RemoteError if not ready to use
         self.basepath = self.annex.getconfig('directory')
+        LOGGER.debug("prepare: basepath = %s", self.basepath)
+        LOGGER.debug("prepare: exists = %s", self.basepath)
         if not self.session.collections.exists(self.basepath):
+            LOGGER.error("prepare: iRODS base dir not findable! (%s)", self.basepath)
             raise RemoteError("base dir {} not findable".format(self.basepath))
         #try:
         #except Exception as e:
@@ -70,6 +86,7 @@ class iRODSRemote(SpecialRemote):
         path = os.path.join(self.basepath, self.annex.dirhash(key))
         # Recurse in code since 26bbc069b (2018-02-06)
         #self.session.collections.create(path, recurse=True)
+        LOGGER.debug("transfer_store: collection create %s", path)
         recursive_collection_create(self.session, path)
         path = os.path.join(path, key)
 
@@ -81,12 +98,15 @@ class iRODSRemote(SpecialRemote):
         with temporary_collection(self.session,
                                   os.path.join(self.basepath, 'tmp')) as tmpcoll:
             tmppath = os.path.join(tmpcoll.path, key)
+            LOGGER.debug("transfer_store: put %s %s", filename, tmppath)
             self.session.data_objects.put(filename, tmppath,
                                           **{irods.keywords.FORCE_FLAG_KW:True})
             try:
+                LOGGER.debug("transfer_store: unlink %s", path)
                 self.session.data_objects.unlink(path, force=True)
             except irods.exception.CAT_NO_ROWS_FOUND:
                 pass
+            LOGGER.debug("transfer_store: move %s %s", tmppath, path)
             self.session.data_objects.move(tmppath, path)
 
     def transfer_retrieve(self, key, filename):
@@ -97,6 +117,7 @@ class iRODSRemote(SpecialRemote):
         #     self.session.data_objects.get(path).open('r') as o:
         #    for chunk in chunks(o):
         #        f.write(chunk)
+        LOGGER.debug("transfer_retrieve: get %s %s", path, filename)
         self.session.data_objects.get(path, filename,
                                       **{irods.keywords.FORCE_FLAG_KW:True})
 
@@ -105,6 +126,7 @@ class iRODSRemote(SpecialRemote):
         # return False if the key is not present
         # raise RemoteError if the presence of the key couldn't be determined, eg. in case of connection error
         path = os.path.join(self.basepath, self.annex.dirhash(key), key)
+        LOGGER.debug("checkpresent: exists %s", path)
         return self.session.data_objects.exists(path)
 
 
@@ -115,10 +137,12 @@ class iRODSRemote(SpecialRemote):
         path = os.path.join(self.basepath, self.annex.dirhash(key), key)
         #print("removing {} {}".format(key, path), file=sys.stderr)
         try:
+            LOGGER.debug("remove: get %s", path)
             obj = self.session.data_objects.get(path)
+            LOGGER.debug("remove: unlink %s", path)
             obj.unlink(force=True)
         except (irods.exception.NoResultFound, irods.exception.CollectionDoesNotExist, irods.exception.DataObjectDoesNotExist):
-            pass
+            LOGGER.debug("remove: (object was not present) %s", path)
 
     #def transferexport_store(self, key, file_, name):
     #    return self.transfer_store(key, file_)
@@ -133,11 +157,15 @@ class iRODSRemote(SpecialRemote):
     #    pass
     #
     def removeexportdirectory(self, directory):
+        LOGGER.debug("removeexportdirectory: get %s", directory)
         coll = self.session.collection.get(directory)
+        LOGGER.debug("removeexportdirectory: remove %s", coll)
         coll.remove(recurse=True)
 
     def renameexport(self, key, name, new_name):
+        LOGGER.debug("renameexport: get %s", name)
         coll = self.session.collection.get(name)
+        LOGGER.debug("renameexport: move %s", new_name)
         coll.move(new_name)
 
 
@@ -150,6 +178,8 @@ def main():
         env_file = os.environ['IRODS_ENVIRONMENT_FILE']
     except KeyError:
         env_file = os.path.expanduser('~/.irods/irods_environment.json')
+    LOGGER.debug("main: env_file = %s", env_file)
+
 
     with iRODSSession(irods_env_file=env_file) as session:
         remote = iRODSRemote(session, master)
