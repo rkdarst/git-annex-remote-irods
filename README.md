@@ -6,11 +6,22 @@ the second has fewer dependencies.
 The data formats of the two should be the same, so they should be
 interchangable.
 
+
+
+
+
 # git-annex special remote for iRODS (python-irodsclient based)
+
+This is a pure-Python implementation using python-irodsclient.  It
+does not depend on icommands.
 
 ## Caveats
 
-- does not support exporting.
+- Does not support exporting (yet)
+- Perhaps larger chance of bugs, since python-irodsclient is not
+  documented that well and I have worked out it's usage somewhat
+  experimentally.
+
 
 ## Usage
 
@@ -28,14 +39,19 @@ git-annex)
 To set up a remote:
 
 ```
-git-annex initremote $REMOTENAME type=external externaltype=irods directory=REMOTE_DIRECTORY encryption=MODE
+git-annex initremote $REMOTENAME type=external externaltype=irods2 directory=REMOTE_DIRECTORY encryption=MODE
 ```
 
 
 ## Dependencies
 
-- python-irodsclient (`pip install python-irods`) (only tested with latest version)
-- annexremote (`pip install annexremote`, https://github.com/Lykos153/AnnexRemote)
+- python-irodsclient (`pip install python-irods`) (only tested with
+  latest version)
+- annexremote (`pip install annexremote`,
+  https://github.com/Lykos153/AnnexRemote), no known version limitations.
+- No known limitations on git-annex versions.
+
+
 
 
 
@@ -66,6 +82,15 @@ installations are typically large, safe data locations and thus
   system could be done with python-irodsclient, and this has roughly
   been started in `git-annex-remote-irods2` in this repo.
 
+- Will not detect if credentials expire during the transfer, but at
+  least it should start failing somehow (and not report successes
+  anymore).
+
+- If you are notn logged in, iRODS will interactively prompt for your
+  password, which won't display on the screen, and git-annex will hang
+  for no apparent reason.  Make sure that `ils` works.  This, like
+  many of the problems, is because the icommands are not very good for
+  scripting.
 
 
 ## Usage
@@ -87,10 +112,23 @@ git-annex initremote $REMOTENAME type=external externaltype=irods directory=REMO
 
 ## Dependencies
 
-The iRODS icommands (in particular, `ils`, `iget`, `iput`, `imkdir`,
-`irm`).
+- The iRODS icommands (in particular, `ils`, `iget`, `iput`, `imkdir`,
+  `irm`).
+- No known limitations on git-annex versions.
 
-No known limitations on git-annex versions.
+
+# Common caveats
+
+- This code is written by someone who is neither an expert in iRODS
+  nor a major expert in git-annex.  A review by an iRODS expert would
+  be welcome.
+
+- On the server I use for testing, disconnections or failures seem
+  common, resulting in it being difficult to complete a test suite.
+
+- Credentials and login not handled.
+
+
 
 
 
